@@ -19,6 +19,50 @@ jobs:
         with:
           fetch-depth: 0
 
+      - name: Log PR to Google Sheet (needreview)
+        if: github.event.action == 'opened'
+        env:
+          GOOGLE_SA_JSON: ${{ secrets.GOOGLE_SERVICE_ACCOUNT_JSON }}
+          PR_URL: ${{ github.event.pull_request.html_url }}
+          PR_TITLE: ${{ github.event.pull_request.title }}
+          PR_AUTHOR: ${{ github.event.pull_request.user.login }}
+          REPO: ${{ github.repository }}
+        run: |
+          pip install -q google-auth google-auth-httplib2 google-api-python-client
+          python3 << 'PYEOF'
+          import os, json
+          from google.oauth2 import service_account
+          from googleapiclient.discovery import build
+          from datetime import datetime, timezone
+
+          sa_info = json.loads(os.environ['GOOGLE_SA_JSON'])
+          creds = service_account.Credentials.from_service_account_info(
+              sa_info, scopes=['https://www.googleapis.com/auth/spreadsheets']
+          )
+          service = build('sheets', 'v4', credentials=creds)
+
+          SHEET_ID = '1k4p5zXnxA8hz1mh1KkglEYMkzw_ZQnic0C56K4vKk4A'
+          now = datetime.now(timezone.utc).isoformat()
+
+          values = [[
+              os.environ['PR_AUTHOR'],
+              os.environ['PR_URL'],
+              os.environ['PR_TITLE'],
+              os.environ['REPO'],
+              now,
+              'needreview'
+          ]]
+
+          service.spreadsheets().values().append(
+              spreadsheetId=SHEET_ID,
+              range='Sheet1!A:F',
+              valueInputOption='RAW',
+              insertDataOption='INSERT_ROWS',
+              body={'values': values}
+          ).execute()
+          print(f"Row written for: {os.environ['PR_URL']}")
+          PYEOF
+
       - name: AI Code Review with Claude
         uses: anthropics/claude-code-action@v1
         env:
@@ -52,3 +96,68 @@ jobs:
             7. Add the label "completed" (green) if verdict is completed, or "reviewed" (yellow) if verdict is reviewed.
 
             Be encouraging but honest. These are trainees learning to code.
+
+      - name: Update verdict in Google Sheet
+        if: always()
+        env:
+          GOOGLE_SA_JSON: ${{ secrets.GOOGLE_SERVICE_ACCOUNT_JSON }}
+          PR_URL: ${{ github.event.pull_request.html_url }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          REPO: ${{ github.repository }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          pip install -q google-auth google-auth-httplib2 google-api-python-client
+
+          # Get current PR labels
+          LABELS=$(curl -s -H "Authorization: Bearer $GH_TOKEN" \
+            "https://api.github.com/repos/$REPO/issues/$PR_NUMBER/labels" | \
+            python3 -c "import sys,json; print(' '.join(l['name'] for l in json.load(sys.stdin)))")
+          echo "PR labels: $LABELS"
+
+          # Pick verdict from labels
+          if echo "$LABELS" | grep -q "completed"; then
+            export VERDICT="completed"
+          else
+            export VERDICT="reviewed"
+          fi
+          echo "Verdict: $VERDICT"
+
+          python3 << 'PYEOF'
+          import os, json
+          from google.oauth2 import service_account
+          from googleapiclient.discovery import build
+
+          sa_info = json.loads(os.environ['GOOGLE_SA_JSON'])
+          creds = service_account.Credentials.from_service_account_info(
+              sa_info, scopes=['https://www.googleapis.com/auth/spreadsheets']
+          )
+          service = build('sheets', 'v4', credentials=creds)
+
+          SHEET_ID = '1k4p5zXnxA8hz1mh1KkglEYMkzw_ZQnic0C56K4vKk4A'
+          pr_url = os.environ['PR_URL']
+          verdict = os.environ['VERDICT']
+
+          # Find the row with this PR URL
+          result = service.spreadsheets().values().get(
+              spreadsheetId=SHEET_ID,
+              range='Sheet1!A:F'
+          ).execute()
+
+          rows = result.get('values', [])
+          row_index = None
+          for i, row in enumerate(rows):
+              if len(row) > 1 and row[1] == pr_url:
+                  row_index = i + 1  # Sheets is 1-indexed
+                  break
+
+          if row_index:
+              service.spreadsheets().values().update(
+                  spreadsheetId=SHEET_ID,
+                  range=f'Sheet1!F{row_index}',
+                  valueInputOption='RAW',
+                  body={'values': [[verdict]]}
+              ).execute()
+              print(f"Updated row {row_index} verdict to: {verdict}")
+          else:
+              print(f"Row not found for PR URL: {pr_url} — skipping update")
+          PYEOF
