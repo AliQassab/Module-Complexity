@@ -42,7 +42,7 @@ jobs:
           service = build('sheets', 'v4', credentials=creds)
 
           SHEET_ID = '1k4p5zXnxA8hz1mh1KkglEYMkzw_ZQnic0C56K4vKk4A'
-          now = datetime.now(timezone.utc).isoformat()
+          now = datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M UTC')
 
           values = [[
               os.environ['PR_AUTHOR'],
