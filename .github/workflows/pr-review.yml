@@ -1,0 +1,51 @@
+name: AI PR Code Review
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+
+jobs:
+  review:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      pull-requests: write
+      issues: write
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: AI Code Review with Claude
+        uses: anthropics/claude-code-action@v1
+        with:
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
+          allowed_non_write_users: "*"
+          prompt: |
+            You are a code reviewer for a training program. A new pull request has been opened.
+
+            Your job:
+            1. Read the root README.md for overall project context.
+            2. Look at which files were changed in this PR. For each changed file, check if there is a README.md in its directory (e.g. if `week3/task1/solution.py` changed, check for `week3/task1/README.md` and `week3/README.md`). Read any that exist — they contain the assignment instructions.
+            3. Review the changed code against the assignment requirements.
+            4. Post INLINE review comments on specific lines where you find issues, using this format so trainees can understand exactly what to fix:
+               - Point out the exact problem on that line
+               - Explain WHY it is a problem
+               - Use a ```suggestion block when you can show a direct fix
+            5. After inline comments, post ONE overall summary comment on the PR with:
+               - A brief summary of what the trainee did
+               - What they did well (positives)
+               - What needs improvement
+               - End with exactly one of these two lines:
+                 VERDICT: completed
+                 VERDICT: reviewed
+               Use "completed" if the code is correct and meets the requirements.
+               Use "reviewed" if there are bugs, missing requirements, or significant issues.
+            6. Remove the label "needreview" from the PR if it exists.
+            7. Add the label "completed" (green) if verdict is completed, or "reviewed" (yellow) if verdict is reviewed.
+
+            Be encouraging but honest. These are trainees learning to code.
