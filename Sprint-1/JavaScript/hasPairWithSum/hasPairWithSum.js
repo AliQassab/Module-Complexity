@@ -28,7 +28,7 @@ export function hasPairWithSum(numbers, target) {
   }
   return false;
 }
-console.log(hasPairWithSum([3, 2, 3, 4, 5], 9));
+
 /*
  * ORIGINAL IMPLEMENTATION (for comparison):
  *
