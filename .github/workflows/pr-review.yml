@@ -71,7 +71,7 @@ jobs:
           github_token: ${{ secrets.GITHUB_TOKEN }}
           anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
           allowed_non_write_users: "*"
-          claude_args: "--model claude-sonnet-4-6 --dangerously-skip-permissions"
+          claude_args: "--model claude-haiku-4-5-20251001 --dangerously-skip-permissions"
           prompt: |
             You are a code reviewer for a training program. A new pull request has been opened.
 
