@@ -3,6 +3,8 @@ name: AI PR Code Review
 on:
   pull_request:
     types: [opened, synchronize, reopened]
+  issue_comment:
+    types: [created]
 
 jobs:
   review:
@@ -13,19 +15,48 @@ jobs:
       pull-requests: write
       issues: write
 
+    # For comment trigger: only run if comment is on a PR and starts with /review
+    if: |
+      github.event_name == 'pull_request' ||
+      (github.event_name == 'issue_comment' &&
+       github.event.issue.pull_request != null &&
+       startsWith(github.event.comment.body, '/review'))
+
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
 
+      # Resolve PR number and URL regardless of which trigger fired
+      - name: Resolve PR info
+        id: pr
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+        run: |
+          if [ "${{ github.event_name }}" == "pull_request" ]; then
+            echo "number=${{ github.event.pull_request.number }}" >> $GITHUB_OUTPUT
+            echo "url=${{ github.event.pull_request.html_url }}" >> $GITHUB_OUTPUT
+            echo "author=${{ github.event.pull_request.user.login }}" >> $GITHUB_OUTPUT
+            echo "title=${{ github.event.pull_request.title }}" >> $GITHUB_OUTPUT
+          else
+            PR_NUMBER=${{ github.event.issue.number }}
+            PR_DATA=$(curl -s -H "Authorization: Bearer $GH_TOKEN" \
+              "https://api.github.com/repos/$REPO/pulls/$PR_NUMBER")
+            echo "number=$PR_NUMBER" >> $GITHUB_OUTPUT
+            echo "url=$(echo $PR_DATA | python3 -c "import sys,json; print(json.load(sys.stdin)['html_url'])")" >> $GITHUB_OUTPUT
+            echo "author=$(echo $PR_DATA | python3 -c "import sys,json; print(json.load(sys.stdin)['user']['login'])")" >> $GITHUB_OUTPUT
+            echo "title=$(echo $PR_DATA | python3 -c "import sys,json; print(json.load(sys.stdin)['title'])")" >> $GITHUB_OUTPUT
+          fi
+
       - name: Log PR to Google Sheet (needreview)
-        if: github.event.action == 'opened'
+        if: github.event_name == 'pull_request' && github.event.action == 'opened'
         env:
           GOOGLE_SA_JSON: ${{ secrets.GOOGLE_SERVICE_ACCOUNT_JSON }}
-          PR_URL: ${{ github.event.pull_request.html_url }}
-          PR_TITLE: ${{ github.event.pull_request.title }}
-          PR_AUTHOR: ${{ github.event.pull_request.user.login }}
+          PR_URL: ${{ steps.pr.outputs.url }}
+          PR_TITLE: ${{ steps.pr.outputs.title }}
+          PR_AUTHOR: ${{ steps.pr.outputs.author }}
           REPO: ${{ github.repository }}
         run: |
           pip install -q google-auth google-auth-httplib2 google-api-python-client
@@ -73,17 +104,22 @@ jobs:
           allowed_non_write_users: "*"
           claude_args: "--model claude-haiku-4-5-20251001 --dangerously-skip-permissions"
           prompt: |
-            You are a code reviewer for a training program. A new pull request has been opened.
+            You are a code reviewer for a training program.
+
+            ${{ github.event_name == 'issue_comment' && format('A user triggered a re-review by commenting: "{0}"', github.event.comment.body) || 'A new pull request has been opened.' }}
+
+            PR number: ${{ steps.pr.outputs.number }}
 
             Your job:
             1. Read the root README.md for overall project context.
             2. Look at which files were changed in this PR. For each changed file, check if there is a README.md in its directory (e.g. if `week3/task1/solution.py` changed, check for `week3/task1/README.md` and `week3/README.md`). Read any that exist — they contain the assignment instructions.
-            3. Review the changed code against the assignment requirements.
-            4. Post INLINE review comments on specific lines where you find issues, using this format so trainees can understand exactly what to fix:
+            3. If the trigger was a /review comment, also read that comment for any specific focus the reviewer requested.
+            4. Review the changed code against the assignment requirements.
+            5. Post INLINE review comments on specific lines where you find issues, using this format so trainees can understand exactly what to fix:
                - Point out the exact problem on that line
                - Explain WHY it is a problem
                - Use a ```suggestion block when you can show a direct fix
-            5. After inline comments, post ONE overall summary comment on the PR with:
+            6. After inline comments, post ONE overall summary comment on the PR with:
                - A brief summary of what the trainee did
                - What they did well (positives)
                - What needs improvement
@@ -92,8 +128,8 @@ jobs:
                  VERDICT: reviewed
                Use "completed" if the code is correct and meets the requirements.
                Use "reviewed" if there are bugs, missing requirements, or significant issues.
-            6. Remove the label "needreview" from the PR if it exists.
-            7. Add the label "completed" (green) if verdict is completed, or "reviewed" (yellow) if verdict is reviewed.
+            7. Remove the label "needreview" from the PR if it exists.
+            8. Add the label "completed" (green) if verdict is completed, or "reviewed" (yellow) if verdict is reviewed.
 
             Be encouraging but honest. These are trainees learning to code.
 
@@ -101,8 +137,8 @@ jobs:
         if: always()
         env:
           GOOGLE_SA_JSON: ${{ secrets.GOOGLE_SERVICE_ACCOUNT_JSON }}
-          PR_URL: ${{ github.event.pull_request.html_url }}
-          PR_NUMBER: ${{ github.event.pull_request.number }}
+          PR_URL: ${{ steps.pr.outputs.url }}
+          PR_NUMBER: ${{ steps.pr.outputs.number }}
           REPO: ${{ github.repository }}
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
